@@ -1,0 +1,353 @@
+//	/*
+	{
+		HDC hDC,hCmpDC;
+		RECT rc;
+
+		hDC = GetDC(ghWndMain);
+
+		GetClientRect(ghWndMain,&rc);
+		IDirectDrawSurface7_GetDC(lpddSrf,&hCmpDC);
+		BitBlt(hDC,0,0,rc.right,rc.bottom,hCmpDC,0,0,SRCCOPY);
+		IDirectDrawSurface7_ReleaseDC(lpddSrf,hCmpDC);
+
+		ReleaseDC(ghWndMain,hDC);
+	}
+//	*/
+
+
+	{//////////////////////////////////////////////////////////////////////////
+		VLine(ddsd.lpSurface,lPitch,
+			GetY(0),GetY(WIN_GAME_HEIGHT-1),GetX(0),CL_RED);
+		VLine(ddsd.lpSurface,lPitch,
+			GetY(0),GetY(WIN_GAME_HEIGHT-1),GetX(WIN_GAME_WIDTH-1),CL_RED);
+		HLine(ddsd.lpSurface,lPitch,
+			GetX(0),GetX(WIN_GAME_WIDTH-1),GetY(0),CL_RED);
+		HLine(ddsd.lpSurface,lPitch,
+			GetX(0),GetX(WIN_GAME_WIDTH-1),GetY(WIN_GAME_HEIGHT-1),CL_RED);
+	}
+
+
+
+//-----------------------------------------------------------------------------
+// Name: MsgProc()
+// Desc: Message handling function.
+//-----------------------------------------------------------------------------
+LRESULT CD3DApplication::MsgProc( HWND hWnd, UINT uMsg, WPARAM wParam,
+                                  LPARAM lParam )
+{
+    HRESULT hr;
+
+    switch( uMsg )
+    {
+        case WM_PAINT:
+            // Handle paint messages when the app is not ready
+            if( m_pd3dDevice && !m_bReady )
+            {
+                if( m_bWindowed )
+                {
+                    Render();
+                    m_pd3dDevice->Present( NULL, NULL, NULL, NULL );
+                }
+            }
+            break;
+
+        case WM_ACTIVATEAPP:
+            m_bHasFocus = (BOOL) wParam;
+            break;
+
+        case WM_GETMINMAXINFO:
+            ((MINMAXINFO*)lParam)->ptMinTrackSize.x = 100;
+            ((MINMAXINFO*)lParam)->ptMinTrackSize.y = 100;
+            break;
+
+        case WM_ENTERSIZEMOVE:
+            // Halt frame movement while the app is sizing or moving
+            Pause( TRUE );
+            break;
+
+        case WM_SIZE:
+            // Check to see if we are losing our window...
+            if( SIZE_MAXHIDE==wParam || SIZE_MINIMIZED==wParam )
+            {
+                if( m_bClipCursorWhenFullscreen && !m_bWindowed )
+                    ClipCursor( NULL );
+                m_bActive = FALSE;
+            }
+            else
+            {
+                m_bActive = TRUE;
+            }
+            break;
+
+        case WM_EXITSIZEMOVE:
+            Pause( FALSE );
+
+            if( m_bActive && m_bWindowed )
+            {
+                RECT rcClientOld;
+                rcClientOld = m_rcWindowClient;
+
+                // Update window properties
+                GetWindowRect( m_hWnd, &m_rcWindowBounds );
+                GetClientRect( m_hWnd, &m_rcWindowClient );
+
+                if( rcClientOld.right - rcClientOld.left !=
+                    m_rcWindowClient.right - m_rcWindowClient.left ||
+                    rcClientOld.bottom - rcClientOld.top !=
+                    m_rcWindowClient.bottom - m_rcWindowClient.top)
+                {
+                    // A new window size will require a new backbuffer
+                    // size, so the 3D structures must be changed accordingly.
+                    m_bReady = FALSE;
+
+                    m_d3dpp.BackBufferWidth  = m_rcWindowClient.right - m_rcWindowClient.left;
+                    m_d3dpp.BackBufferHeight = m_rcWindowClient.bottom - m_rcWindowClient.top;
+
+                    // Resize the 3D environment
+                    if( FAILED( hr = Resize3DEnvironment() ) )
+                    {
+                        DisplayErrorMsg( D3DAPPERR_RESIZEFAILED, MSGERR_APPMUSTEXIT );
+                        return 0;
+                    }
+
+                    m_bReady = TRUE;
+                }
+            }
+
+            break;
+
+        case WM_SETCURSOR:
+            // Turn off Windows cursor in fullscreen mode
+            if( m_bActive && m_bReady && !m_bWindowed )
+            {
+                SetCursor( NULL );
+                if( m_bShowCursorWhenFullscreen )
+                    m_pd3dDevice->ShowCursor( TRUE );
+                return TRUE; // prevent Windows from setting cursor to window class cursor
+            }
+            break;
+
+         case WM_MOUSEMOVE:
+            if( m_bActive && m_bReady && m_pd3dDevice != NULL )
+            {
+                POINT ptCursor;
+                GetCursorPos( &ptCursor );
+                if( !m_bWindowed )
+                    ScreenToClient( m_hWnd, &ptCursor );
+                m_pd3dDevice->SetCursorPosition( ptCursor.x, ptCursor.y, 0L );
+            }
+            break;
+
+       case WM_ENTERMENULOOP:
+            // Pause the app when menus are displayed
+            Pause(TRUE);
+            break;
+
+        case WM_EXITMENULOOP:
+            Pause(FALSE);
+            break;
+
+        case WM_CONTEXTMENU:
+            // No context menus allowed in fullscreen mode
+            if( m_bWindowed == FALSE )
+                break;
+
+            // Handle the app's context menu (via right mouse click)
+            TrackPopupMenuEx( GetSubMenu( LoadMenu( 0, MAKEINTRESOURCE(IDR_POPUP) ), 0 ),
+                              TPM_VERTICAL, LOWORD(lParam), HIWORD(lParam), hWnd, NULL );
+            break;
+
+        case WM_NCHITTEST:
+            // Prevent the user from selecting the menu in fullscreen mode
+            if( !m_bWindowed )
+                return HTCLIENT;
+
+            break;
+
+        case WM_POWERBROADCAST:
+            switch( wParam )
+            {
+                #ifndef PBT_APMQUERYSUSPEND
+                    #define PBT_APMQUERYSUSPEND 0x0000
+                #endif
+                case PBT_APMQUERYSUSPEND:
+                    // At this point, the app should save any data for open
+                    // network connections, files, etc., and prepare to go into
+                    // a suspended mode.
+                    return TRUE;
+
+                #ifndef PBT_APMRESUMESUSPEND
+                    #define PBT_APMRESUMESUSPEND 0x0007
+                #endif
+                case PBT_APMRESUMESUSPEND:
+                    // At this point, the app should recover any data, network
+                    // connections, files, etc., and resume running from when
+                    // the app was suspended.
+                    return TRUE;
+            }
+            break;
+
+        case WM_SYSCOMMAND:
+            // Prevent moving/sizing and power loss in fullscreen mode
+            switch( wParam )
+            {
+                case SC_MOVE:
+                case SC_SIZE:
+                case SC_MAXIMIZE:
+                case SC_KEYMENU:
+                case SC_MONITORPOWER:
+                    if( FALSE == m_bWindowed )
+                        return 1;
+                    break;
+            }
+            break;
+
+        case WM_COMMAND:
+            switch( LOWORD(wParam) )
+            {
+                case IDM_TOGGLESTART:
+                    // Toggle frame movement
+                    m_bFrameMoving = !m_bFrameMoving;
+                    DXUtil_Timer( m_bFrameMoving ? TIMER_START : TIMER_STOP );
+                    break;
+
+                case IDM_SINGLESTEP:
+                    // Single-step frame movement
+                    if( FALSE == m_bFrameMoving )
+                        DXUtil_Timer( TIMER_ADVANCE );
+                    else
+                        DXUtil_Timer( TIMER_STOP );
+                    m_bFrameMoving = FALSE;
+                    m_bSingleStep  = TRUE;
+                    break;
+
+                case IDM_CHANGEDEVICE:
+                    // Prompt the user to select a new device or mode
+                    if( m_bActive && m_bReady )
+                    {
+                        Pause(TRUE);
+
+                        if( FAILED( hr = UserSelectNewDevice() ) )
+                            return 0;
+
+                        Pause(FALSE);
+                    }
+                    return 0;
+
+                case IDM_TOGGLEFULLSCREEN:
+                    // Toggle the fullscreen/window mode
+                    if( m_bActive && m_bReady )
+                    {
+                        Pause( TRUE );
+                        
+                        if( FAILED( ToggleFullscreen() ) )
+                        {
+                            DisplayErrorMsg( D3DAPPERR_RESIZEFAILED, MSGERR_APPMUSTEXIT );
+                            return 0;
+                        }
+
+                        Pause( FALSE );                        
+                    }
+                    return 0;
+
+                case IDM_EXIT:
+                    // Recieved key/menu command to exit app
+                    SendMessage( hWnd, WM_CLOSE, 0, 0 );
+                    return 0;
+            }
+            break;
+
+        case WM_CLOSE:
+            Cleanup3DEnvironment();
+            DestroyMenu( GetMenu(hWnd) );
+            DestroyWindow( hWnd );
+            PostQuitMessage(0);
+            return 0;
+    }
+
+    return DefWindowProc( hWnd, uMsg, wParam, lParam );
+}
+
+//-----------------------------------------------------------------------------
+// Name: Create()
+// Desc:
+//-----------------------------------------------------------------------------
+HRESULT CD3DApplication::Create( HINSTANCE hInstance )
+{
+    HRESULT hr;
+
+    // Create the Direct3D object
+    m_pD3D = Direct3DCreate8( D3D_SDK_VERSION );
+    if( m_pD3D == NULL )
+        return DisplayErrorMsg( D3DAPPERR_NODIRECT3D, MSGERR_APPMUSTEXIT );
+
+    // Build a list of Direct3D adapters, modes and devices. The
+    // ConfirmDevice() callback is used to confirm that only devices that
+    // meet the app's requirements are considered.
+    if( FAILED( hr = BuildDeviceList() ) )
+    {
+        SAFE_RELEASE( m_pD3D );
+        return DisplayErrorMsg( hr, MSGERR_APPMUSTEXIT );
+    }
+
+    // Unless a substitute hWnd has been specified, create a window to
+    // render into
+    if( m_hWnd == NULL)
+    {
+        // Register the windows class
+        WNDCLASS wndClass = { 0, WndProc, 0, 0, hInstance,
+                              LoadIcon( hInstance, MAKEINTRESOURCE(IDI_MAIN_ICON) ),
+                              LoadCursor( NULL, IDC_ARROW ),
+                              (HBRUSH)GetStockObject(WHITE_BRUSH),
+                              NULL, _T("D3D Window") };
+        RegisterClass( &wndClass );
+
+        // Set the window's initial style
+        m_dwWindowStyle = WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_THICKFRAME|
+                          WS_MINIMIZEBOX|WS_VISIBLE;
+
+        // Set the window's initial width
+        RECT rc;
+        SetRect( &rc, 0, 0, m_dwCreationWidth, m_dwCreationHeight );
+        AdjustWindowRect( &rc, m_dwWindowStyle, TRUE );
+
+        // Create the render window
+        m_hWnd = CreateWindow( _T("D3D Window"), m_strWindowTitle, m_dwWindowStyle,
+                               CW_USEDEFAULT, CW_USEDEFAULT,
+                               (rc.right-rc.left), (rc.bottom-rc.top), 0L,
+                               LoadMenu( hInstance, MAKEINTRESOURCE(IDR_MENU) ),
+                               hInstance, 0L );
+    }
+
+    // The focus window can be a specified to be a different window than the
+    // device window.  If not, use the device window as the focus window.
+    if( m_hWndFocus == NULL )
+        m_hWndFocus = m_hWnd;
+
+    // Save window properties
+    m_dwWindowStyle = GetWindowLong( m_hWnd, GWL_STYLE );
+    GetWindowRect( m_hWnd, &m_rcWindowBounds );
+    GetClientRect( m_hWnd, &m_rcWindowClient );
+
+    // Initialize the application timer
+    DXUtil_Timer( TIMER_START );
+
+    // Initialize the app's custom scene stuff
+    if( FAILED( hr = OneTimeSceneInit() ) )
+    {
+        SAFE_RELEASE( m_pD3D );
+        return DisplayErrorMsg( hr, MSGERR_APPMUSTEXIT );
+    }
+
+    // Initialize the 3D environment for the app
+    if( FAILED( hr = Initialize3DEnvironment() ) )
+    {
+        SAFE_RELEASE( m_pD3D );
+        return DisplayErrorMsg( hr, MSGERR_APPMUSTEXIT );
+    }
+
+    // The app is ready to go
+    m_bReady = TRUE;
+
+    return S_OK;
+}
